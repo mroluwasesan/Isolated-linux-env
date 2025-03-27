@@ -107,6 +107,7 @@ ESSENTIAL_BINARIES=(
     /bin/mkdir
     /bin/mount
     /bin/umount
+    /bin/rm
     /bin/ip
     /usr/bin/hostname
     /bin/sh
@@ -121,6 +122,8 @@ ESSENTIAL_BINARIES=(
     /bin/tar
     /bin/gzip
     /bin/which
+    /usr/bin/python3
+    /usr/sbin/nginx
 )
 
 # Copy all essential binaries
@@ -153,6 +156,9 @@ EXTRA_LIBS=(
     /lib/x86_64-linux-gnu/librtmp.so.1
     /lib/x86_64-linux-gnu/libssh.so.4
     /lib/x86_64-linux-gnu/libpsl.so.5
+    /lib/x86_64-linux-gnu/libpython3.so*
+    /usr/lib/x86_64-linux-gnu/libssl.so*
+    /usr/lib/x86_64-linux-gnu/libcrypto.so*
 )
 
 for lib in "${EXTRA_LIBS[@]}"; do
@@ -199,6 +205,12 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 iptables -t nat -A POSTROUTING -s $CONTAINER_IP/24 -o eth0 -j MASQUERADE 2>/dev/null || true
 iptables -A FORWARD -i veth0 -j ACCEPT 2>/dev/null || true
 iptables -A FORWARD -o veth0 -j ACCEPT 2>/dev/null || true
+
+# Allow container to access host network
+# Port forwarding from host to container
+iptables -t nat -A PREROUTING -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
+iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
+iptables -t nat -A OUTPUT -o lo -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
 
 # Cgroups setup
 echo "Configuring cgroups with:"

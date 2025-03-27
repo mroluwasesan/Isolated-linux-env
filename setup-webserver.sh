@@ -60,17 +60,25 @@ EOF
 chmod +x $CONTAINER_FS/start-webserver
 
 # 5. Copy Python binary and dependencies if not already present
-if [ ! -f "$CONTAINER_FS/usr/bin/python3" ]; then
-    echo "Copying Python and dependencies..."
-    cp /usr/bin/python3 $CONTAINER_FS/usr/bin/
-    
-    # Copy required libraries
-    for lib in $(ldd /usr/bin/python3 | grep -o '/[^ ]*'); do
-        lib_dir=$(dirname $lib)
-        mkdir -p $CONTAINER_FS$lib_dir
-        cp $lib $CONTAINER_FS$lib_dir/
-    done
-fi
+echo "Copying Python and dependencies..."
+cp /usr/bin/python3 $CONTAINER_FS/usr/bin/
+
+# Copy Python standard libraries
+PYTHON_VERSION=$(python3 --version | awk '{print $2}' | cut -d. -f1-2)
+mkdir -p $CONTAINER_FS/usr/lib/python$PYTHON_VERSION
+cp -r /usr/lib/python$PYTHON_VERSION/* $CONTAINER_FS/usr/lib/python$PYTHON_VERSION/
+
+# Copy other Python directories
+[ -d "/usr/lib/python3.8" ] && cp -r /usr/lib/python3.8 $CONTAINER_FS/usr/lib/
+[ -d "/usr/lib/python3.8/lib-dynload" ] && cp -r /usr/lib/python3.8/lib-dynload $CONTAINER_FS/usr/lib/python3.8/
+[ -f "/usr/lib/python3.8.zip" ] && cp /usr/lib/python3.8.zip $CONTAINER_FS/usr/lib/
+
+# Copy required libraries
+for lib in $(ldd /usr/bin/python3 | grep -o '/[^ ]*'); do
+    lib_dir=$(dirname $lib)
+    mkdir -p $CONTAINER_FS$lib_dir
+    cp $lib $CONTAINER_FS$lib_dir/
+done
 
 echo "Web server setup complete in $CONTAINER_NAME"
 echo "To start:"
