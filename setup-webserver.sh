@@ -53,7 +53,7 @@ cat > $CONTAINER_FS/start-webserver <<'EOF'
 # Start Python web server
 cd /var/www/html
 echo "Web server starting on port 8000"
-exec python3 -m http.server 8000
+exec python3 -m http.server 8000 --bind 0.0.0.0
 EOF
 
 # 4. Make it executable

@@ -109,6 +109,8 @@ ESSENTIAL_BINARIES=(
     /bin/umount
     /bin/rm
     /bin/ip
+    /bin/ps
+    /bin/netstat
     /usr/bin/hostname
     /bin/sh
     /usr/bin/awk
