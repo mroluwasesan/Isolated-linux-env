@@ -226,8 +226,12 @@ iptables -A FORWARD -o veth0 -j ACCEPT
 
 # Port forwarding
 iptables -t nat -A PREROUTING -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
-iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
 iptables -t nat -A OUTPUT -o lo -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
+iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
+iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+
+
 
 # Cgroups setup
 echo "Configuring cgroups with:"
