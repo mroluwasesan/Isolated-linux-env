@@ -110,7 +110,11 @@ ESSENTIAL_BINARIES=(
     /bin/rm
     /bin/ip
     /bin/ps
-    /bin/netstat
+    /bin/chmod
+    /bin/netstat       
+    /usr/bin/netstat   
+    /usr/sbin/netstat
+    /usr/bin/ss
     /usr/bin/hostname
     /bin/sh
     /usr/bin/awk
@@ -191,25 +195,36 @@ nameserver 8.8.8.8
 EOF
 
 # Network setup
-ip netns add $CONTAINER_NAME 2>/dev/null || true
-ip link add veth0 type veth peer name veth1 2>/dev/null || true
-ip link set veth1 netns $CONTAINER_NAME 2>/dev/null || true
-ip addr add $HOST_IP/24 dev veth0 2>/dev/null || true
-ip link set veth0 up 2>/dev/null || true
+echo "Setting up network for $CONTAINER_NAME..."
 
-ip netns exec $CONTAINER_NAME ip addr add $CONTAINER_IP/24 dev veth1 2>/dev/null || true
-ip netns exec $CONTAINER_NAME ip link set veth1 up 2>/dev/null || true
-ip netns exec $CONTAINER_NAME ip link set lo up 2>/dev/null || true
-ip netns exec $CONTAINER_NAME ip route add default via $HOST_IP 2>/dev/null || true
+# Create network namespace (force remove old one first)
+ip netns del $CONTAINER_NAME 2>/dev/null || true
+ip netns add $CONTAINER_NAME || { echo "Failed to create network namespace"; exit 1; }
 
-# NAT
+# Create veth pair (remove old ones first)
+ip link del veth0 2>/dev/null || true
+ip link add veth0 type veth peer name veth1 || { echo "Failed to create veth pair"; exit 1; }
+
+# Move veth1 to namespace
+ip link set veth1 netns $CONTAINER_NAME || { echo "Failed to move veth1 to namespace"; exit 1; }
+
+# Configure host side
+ip addr add $HOST_IP/24 dev veth0 || { echo "Failed to assign IP to veth0"; exit 1; }
+ip link set veth0 up || { echo "Failed to bring up veth0"; exit 1; }
+
+# Configure container side
+ip netns exec $CONTAINER_NAME ip addr add $CONTAINER_IP/24 dev veth1 || { echo "Failed to assign IP to veth1"; exit 1; }
+ip netns exec $CONTAINER_NAME ip link set veth1 up || { echo "Failed to bring up veth1"; exit 1; }
+ip netns exec $CONTAINER_NAME ip link set lo up || { echo "Failed to bring up lo"; exit 1; }
+ip netns exec $CONTAINER_NAME ip route add default via $HOST_IP || { echo "Failed to set default route"; exit 1; }
+
+# Enable NAT
 echo 1 > /proc/sys/net/ipv4/ip_forward
-iptables -t nat -A POSTROUTING -s $CONTAINER_IP/24 -o eth0 -j MASQUERADE 2>/dev/null || true
-iptables -A FORWARD -i veth0 -j ACCEPT 2>/dev/null || true
-iptables -A FORWARD -o veth0 -j ACCEPT 2>/dev/null || true
+iptables -t nat -A POSTROUTING -s $CONTAINER_IP/24 -o eth0 -j MASQUERADE
+iptables -A FORWARD -i veth0 -j ACCEPT
+iptables -A FORWARD -o veth0 -j ACCEPT
 
-# Allow container to access host network
-# Port forwarding from host to container
+# Port forwarding
 iptables -t nat -A PREROUTING -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
 iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
 iptables -t nat -A OUTPUT -o lo -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
