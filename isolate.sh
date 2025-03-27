@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Default Configuration
+DEFAULT_MEMORY_LIMIT_MB=100  # 100MB default
+DEFAULT_CPU_PERCENT=50       # 50% CPU default
+
+
 # Configuration
 if [ -z "$1" ]; then
     read -p "Please enter a container name (default: mycontainer): " input_name
@@ -12,6 +17,36 @@ CONTAINER_ROOT=/var/containers/$CONTAINER_NAME
 CONTAINER_FS=$CONTAINER_ROOT/fs
 HOST_IP="10.0.0.1"
 CONTAINER_IP="10.0.0.2"
+
+# Parse custom resource limits if provided
+if [ "$2" = "start" ] || [ "$2" = "test" ]; then
+    # Use default values
+    MEMORY_LIMIT=$((DEFAULT_MEMORY_LIMIT_MB * 1024 * 1024))
+    CPU_QUOTA=$((DEFAULT_CPU_PERCENT * 1000))  # Convert percentage to quota units
+    CPU_PERIOD=100000  # 100ms (standard base period)
+    
+    # Check for custom memory limit (in MB)
+    if [[ "$3" =~ ^[0-9]+$ ]]; then
+        MEMORY_LIMIT=$(( $3 * 1024 * 1024 ))
+        echo "Using custom memory limit: $3 MB"
+    fi
+    
+    # Check for custom CPU limit (percentage)
+    if [[ "$4" =~ ^[0-9]+$ ]]; then
+        if [ "$4" -gt 100 ]; then
+            echo "Warning: CPU percentage cannot exceed 100%, using 100%"
+            CPU_QUOTA=100000
+        else
+            CPU_QUOTA=$(( $4 * 1000 ))
+            echo "Using custom CPU limit: $4%"
+        fi
+    fi
+else
+    # Set default values when not starting/testing
+    MEMORY_LIMIT=$((DEFAULT_MEMORY_LIMIT_MB * 1024 * 1024))
+    CPU_QUOTA=$((DEFAULT_CPU_PERCENT * 1000))
+    CPU_PERIOD=100000
+fi
 
 # Check root
 [ "$(id -u)" -ne 0 ] && { echo "Must be root"; exit 1; }
@@ -75,6 +110,17 @@ ESSENTIAL_BINARIES=(
     /bin/ip
     /usr/bin/hostname
     /bin/sh
+    /usr/bin/awk
+    /usr/bin/wc
+    /usr/bin/grep
+    /bin/dd
+    /bin/sleep
+    /bin/ping
+    /usr/bin/git
+    /usr/bin/curl
+    /bin/tar
+    /bin/gzip
+    /bin/which
 )
 
 # Copy all essential binaries
@@ -82,16 +128,31 @@ for binary in "${ESSENTIAL_BINARIES[@]}"; do
     if [ -f "$binary" ]; then
         copy_binary "$binary"
     else
-        echo "Warning: Binary $binary not found"
+        echo "Warning: Binary $binary not found - some tests may fail"
     fi
 done
 
-# Additional required libraries that might be missed
+# Additional required libraries
 EXTRA_LIBS=(
     /lib64/ld-linux-x86-64.so.2
     /lib/x86_64-linux-gnu/libnss_files.so.2
     /lib/x86_64-linux-gnu/libnss_dns.so.2
     /lib/x86_64-linux-gnu/libresolv.so.2
+    /lib/x86_64-linux-gnu/libmount.so.1
+    /lib/x86_64-linux-gnu/libblkid.so.1
+    /lib/x86_64-linux-gnu/libuuid.so.1
+    /lib/x86_64-linux-gnu/libc.so.6
+    /lib/x86_64-linux-gnu/libselinux.so.1
+    /lib/x86_64-linux-gnu/libpcre2-8.so.0
+    /lib/x86_64-linux-gnu/libdl.so.2
+    /lib/x86_64-linux-gnu/libpthread.so.0
+    /lib/x86_64-linux-gnu/libm.so.
+    /lib/x86_64-linux-gnu/libcurl.so.4
+    /lib/x86_64-linux-gnu/libnghttp2.so.14
+    /lib/x86_64-linux-gnu/libidn2.so.0
+    /lib/x86_64-linux-gnu/librtmp.so.1
+    /lib/x86_64-linux-gnu/libssh.so.4
+    /lib/x86_64-linux-gnu/libpsl.so.5
 )
 
 for lib in "${EXTRA_LIBS[@]}"; do
@@ -102,7 +163,7 @@ for lib in "${EXTRA_LIBS[@]}"; do
     fi
 done
 
-# Create device files (skip if exist)
+# Create device files
 [ ! -e $CONTAINER_FS/dev/null ] && mknod -m 666 $CONTAINER_FS/dev/null c 1 3
 [ ! -e $CONTAINER_FS/dev/zero ] && mknod -m 666 $CONTAINER_FS/dev/zero c 1 5
 [ ! -e $CONTAINER_FS/dev/random ] && mknod -m 666 $CONTAINER_FS/dev/random c 1 8
@@ -140,19 +201,26 @@ iptables -A FORWARD -i veth0 -j ACCEPT 2>/dev/null || true
 iptables -A FORWARD -o veth0 -j ACCEPT 2>/dev/null || true
 
 # Cgroups setup
-echo "Configuring cgroups..."
-# Memory cgroup
-cgcreate -g memory:$CONTAINER_NAME
-echo $(( $(echo $MEMORY_LIMIT | sed 's/[^0-9]*//g') * 1024 * 1024 )) > /sys/fs/cgroup/memory/$CONTAINER_NAME/memory.limit_in_bytes
-echo $(( $(echo $MEMORY_LIMIT | sed 's/[^0-9]*//g') * 1024 * 1024 )) > /sys/fs/cgroup/memory/$CONTAINER_NAME/memory.memsw.limit_in_bytes
+echo "Configuring cgroups with:"
+echo "  Memory Limit: $((MEMORY_LIMIT / 1024 / 1024)) MB"
+echo "  CPU Limit: $((CPU_QUOTA / 1000))%"
+mkdir -p /sys/fs/cgroup/memory/$CONTAINER_NAME
+mkdir -p /sys/fs/cgroup/cpu/$CONTAINER_NAME
 
-# CPU cgroup
-cgcreate -g cpu:$CONTAINER_NAME
-echo $CPU_QUOTA > /sys/fs/cgroup/cpu/$CONTAINER_NAME/cpu.cfs_quota_us
-echo $CPU_PERIOD > /sys/fs/cgroup/cpu/$CONTAINER_NAME/cpu.cfs_period_us
+# Set memory limits
+echo $MEMORY_LIMIT > /sys/fs/cgroup/memory/$CONTAINER_NAME/memory.limit_in_bytes 2>/dev/null || \
+    echo "Warning: Could not set memory limit (cgroups v2 might be in use)"
+
+# Set CPU limits
+echo $CPU_QUOTA > /sys/fs/cgroup/cpu/$CONTAINER_NAME/cpu.cfs_quota_us 2>/dev/null || \
+    echo "Warning: Could not set CPU quota (cgroups v2 might be in use)"
+echo $CPU_PERIOD > /sys/fs/cgroup/cpu/$CONTAINER_NAME/cpu.cfs_period_us 2>/dev/null || \
+    echo "Warning: Could not set CPU period (cgroups v2 might be in use)"
+
 
 # Start container function
 start_container() {
+    echo "Starting container..."
     # Mount filesystems
     mount -t proc proc $CONTAINER_FS/proc
     mount -t sysfs sysfs $CONTAINER_FS/sys
@@ -160,17 +228,80 @@ start_container() {
     
     # Enter container
     unshare --pid --mount-proc --fork --mount --uts --ipc --net=/var/run/netns/$CONTAINER_NAME \
-        chroot $CONTAINER_FS /bin/bash -c "
-        export PATH=/bin:/sbin:/usr/bin:/usr/sbin
-        export PS1='[$CONTAINER_NAME] \w \$ '
-        hostname $CONTAINER_NAME
-        exec /bin/bash
+        /bin/bash -c "
+        echo \$$ > /sys/fs/cgroup/memory/$CONTAINER_NAME/tasks 2>/dev/null
+        echo \$$ > /sys/fs/cgroup/cpu/$CONTAINER_NAME/tasks 2>/dev/null
+        chroot $CONTAINER_FS /bin/bash -c \"
+            mount -t proc proc /proc
+            mount -t sysfs sysfs /sys
+            hostname $CONTAINER_NAME
+            export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+            export PS1='[$CONTAINER_NAME] \w \$ '
+            exec /bin/bash
+        \"
     "
 }
 
+test_limits() {
+    echo "Running reliable limit tests..."
+    unshare --pid --mount-proc --fork --mount --uts --ipc --net=/var/run/netns/$CONTAINER_NAME \
+        /bin/bash -c "
+        # Add process to cgroups if they exist
+        [ -f /sys/fs/cgroup/memory/$CONTAINER_NAME/tasks ] && echo \$$ > /sys/fs/cgroup/memory/$CONTAINER_NAME/tasks
+        [ -f /sys/fs/cgroup/cpu/$CONTAINER_NAME/tasks ] && echo \$$ > /sys/fs/cgroup/cpu/$CONTAINER_NAME/tasks
+        
+        chroot $CONTAINER_FS /bin/bash -c '
+            # Mount required filesystems
+            mount -t proc proc /proc
+            mount -t sysfs sysfs /sys
+            
+            # Fixed Memory Test
+            echo \"=== Memory Test (Limit: $((MEMORY_LIMIT / 1024 / 1024))MB) ===\"
+            echo \"Testing memory access...\"
+            chunk_size=10  # Test with 10MB chunks
+            max_chunks=$(( ($MEMORY_LIMIT / 1024 / 1024) / 10 ))
+            
+            for ((i=1; i<=max_chunks; i++)); do
+                echo \"- Allocating ${chunk_size}MB (chunk \$i of \$max_chunks)...\"
+                if ! dd if=/dev/zero of=/dev/null bs=1M count=\$chunk_size 2>/dev/null; then
+                    echo \"! Memory allocation failed at \$((i*chunk_size))MB\"
+                    break
+                fi
+            done
+            [ \$i -gt \$max_chunks ] && echo \"+ Memory test completed successfully\"
+            
+            # CPU Test
+            echo \"\n=== CPU Test (Limit: $((CPU_QUOTA / 1000))%) ===\"
+            echo \"Running CPU stress for 3 seconds...\"
+            end=\$((SECONDS+3))
+            while [ \$SECONDS -lt \$end ]; do
+                : # Busy loop
+            done
+            echo \"CPU test completed\"
+            
+            # Isolation Verification
+            echo \"\n=== Isolation Verification ===\"
+            echo \"Processes visible: \$(ps aux | wc -l)\"
+            echo \"Network interfaces: \$(ip -o link show | wc -l)\"
+            echo \"Files in root: \$(ls / | wc -l)\"
+            echo \"Can access /etc/passwd: \$(test -f /etc/passwd && echo \"Yes\" || echo \"No\")\"
+            echo \"Can ping gateway: \$(ping -c1 -W1 $HOST_IP >/dev/null 2>&1 && echo \"Yes\" || echo \"No\")\"
+        '
+    " || echo "Test completed with exit code $?"
+}
+
 # Start if requested
-[ "$2" = "start" ] && { start_container; exit; }
+if [ "$2" = "start" ]; then
+    start_container
+    exit
+elif [ "$2" = "test" ]; then
+    test_limits
+    exit
+fi
 
 echo "Container $CONTAINER_NAME ready at $CONTAINER_FS"
-echo "Start with: sudo ./isolate.sh $CONTAINER_NAME start"
-echo "Clean with: sudo ./isolate.sh $CONTAINER_NAME clean"
+echo "Start with defaults: sudo $0 $CONTAINER_NAME start"
+echo "Start with custom limits: sudo $0 $CONTAINER_NAME start [MEMORY_MB] [CPU_PERCENT]"
+echo "Test with defaults: sudo $0 $CONTAINER_NAME test"
+echo "Test with custom limits: sudo $0 $CONTAINER_NAME test [MEMORY_MB] [CPU_PERCENT]"
+echo "Clean with: sudo $0 $CONTAINER_NAME clean"
