@@ -128,7 +128,6 @@ ESSENTIAL_BINARIES=(
     /bin/tar
     /bin/gzip
     /bin/which
-<<<<<<< HEAD
     /usr/bin/wget
     /bin/rm
     /bin/chmod
@@ -136,10 +135,6 @@ ESSENTIAL_BINARIES=(
     /usr/bin/make
     /bin/grep
     /bin/sed
-=======
-    /usr/bin/python3
-    /usr/sbin/nginx
->>>>>>> 3a3bb98b313426088ad266758a17932ff95395d9
 )
 
 # Copy all essential binaries
