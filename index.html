@@ -49,7 +49,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         </body>
         </html>
         """
-        self.wfile.write(html_content)
+        self.wfile.write(html_content.encode('utf-8'))
 
 httpd = HTTPServer(('0.0.0.0', 8000), SimpleHTTPRequestHandler)
 print("Server started at http://0.0.0.0:8000")
