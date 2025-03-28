@@ -121,6 +121,13 @@ ESSENTIAL_BINARIES=(
     /bin/tar
     /bin/gzip
     /bin/which
+    /usr/bin/wget
+    /bin/rm
+    /bin/chmod
+    /bin/ln
+    /usr/bin/make
+    /bin/grep
+    /bin/sed
 )
 
 # Copy all essential binaries
@@ -153,6 +160,8 @@ EXTRA_LIBS=(
     /lib/x86_64-linux-gnu/librtmp.so.1
     /lib/x86_64-linux-gnu/libssh.so.4
     /lib/x86_64-linux-gnu/libpsl.so.5
+    /lib/x86_64-linux-gnu/libssl.so.1.1
+    /lib/x86_64-linux-gnu/libcrypto.so.1.1
 )
 
 for lib in "${EXTRA_LIBS[@]}"; do
