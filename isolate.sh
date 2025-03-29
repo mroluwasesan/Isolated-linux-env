@@ -198,7 +198,7 @@ cat > $CONTAINER_FS/etc/resolv.conf <<EOF
 nameserver 8.8.8.8
 EOF
 
-# Network setup
+# Network setup ------------------------------------------------------------------------------------
 echo "Setting up network for $CONTAINER_NAME..."
 
 # Create network namespace (force remove old one first)
@@ -206,35 +206,34 @@ ip netns del $CONTAINER_NAME 2>/dev/null || true
 ip netns add $CONTAINER_NAME || { echo "Failed to create network namespace"; exit 1; }
 
 # Create veth pair (remove old ones first)
-ip link del veth0 2>/dev/null || true
-ip link add veth0 type veth peer name veth1 || { echo "Failed to create veth pair"; exit 1; }
+ip link del veth0-new 2>/dev/null || true
+ip link add veth0-host type veth peer name veth1-new || { echo "Failed to create veth pair"; exit 1; }
 
-# Move veth1 to namespace
-ip link set veth1 netns $CONTAINER_NAME || { echo "Failed to move veth1 to namespace"; exit 1; }
+# Move veth1-new to the container namespace
+ip link add veth1-host type veth peer name veth1-new
+ip link set veth1-new netns $CONTAINER_NAME || { echo "Failed to move veth1-new to namespace"; exit 1; }
 
 # Configure host side
-ip addr add $HOST_IP/24 dev veth0 || { echo "Failed to assign IP to veth0"; exit 1; }
-ip link set veth0 up || { echo "Failed to bring up veth0"; exit 1; }
+ip addr addr 10.0.0.1/24 dev veth0-new || { echo "Failed to assign IP to veth0-new"; exit 1; }
+ip link set veth0-new up || { echo "Failed to bring up veth0-new"; exit 1; }
 
 # Configure container side
-ip netns exec $CONTAINER_NAME ip addr add $CONTAINER_IP/24 dev veth1 || { echo "Failed to assign IP to veth1"; exit 1; }
-ip netns exec $CONTAINER_NAME ip link set veth1 up || { echo "Failed to bring up veth1"; exit 1; }
+ip netns exec $CONTAINER_NAME ip addr add 10.0.0.2/24 dev veth1-new || { echo "Failed to assign IP to veth1-new"; exit 1; }
+ip netns exec $CONTAINER_NAME ip link set veth1-new up || { echo "Failed to bring up veth1-new"; exit 1; }
 ip netns exec $CONTAINER_NAME ip link set lo up || { echo "Failed to bring up lo"; exit 1; }
-ip netns exec $CONTAINER_NAME ip route add default via $HOST_IP || { echo "Failed to set default route"; exit 1; }
 
-# Enable NAT
-echo 1 > /proc/sys/net/ipv4/ip_forward
-iptables -t nat -A POSTROUTING -s $CONTAINER_IP/24 -o eth0 -j MASQUERADE
-iptables -A FORWARD -i veth0 -j ACCEPT
-iptables -A FORWARD -o veth0 -j ACCEPT
+# Enable IP forwarding
+sudo sysctl -w net.ipv4.ip_forward=1 || { echo "Failed to enable IP forwarding"; exit 1; }
 
-# Port forwarding
-iptables -t nat -A PREROUTING -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
-iptables -t nat -A OUTPUT -o lo -p tcp --dport 8000 -j DNAT --to-destination $CONTAINER_IP:8000
-iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
-iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+# Port forwarding (for port 80 to 8000)
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 10.0.0.2:8000
+iptables -A FORWARD -p tcp -d 10.0.0.2 --dport 8000 -j ACCEPT
 
+# Set up NAT for outbound connections
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -j MASQUERADE
 
+# Add default route in container
+ip netns exec $CONTAINER_NAME ip route add default via 10.0.0.1 || { echo "Failed to set default route"; exit 1; }
 
 
 # Cgroups setup

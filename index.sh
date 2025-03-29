@@ -7,7 +7,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         
-        html_content = b"""
+        html_content = """
         <!DOCTYPE html>
         <html lang="en">
         <head>
