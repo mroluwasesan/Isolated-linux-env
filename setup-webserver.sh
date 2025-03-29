@@ -125,3 +125,8 @@ echo "3. Access from host: curl http://10.0.0.2:8000"
 
 
 
+
+
+# 6. Set up iptables for port forwarding
+sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 10.0.0.2:8000
+sudo iptables -A FORWARD -p tcp -d 10.0.0.2 --dport 8000 -j ACCEPT
