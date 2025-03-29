@@ -76,7 +76,7 @@ cleanup() {
 # Clean before create if starting
 [ "$2" = "start" ] && cleanup
 
-# Create filesystem structure
+# Create filesystem structure ------------------------------------------------------------------------------------
 mkdir -p $CONTAINER_FS/{bin,dev,etc,lib,lib64,proc,root,sbin,sys,tmp,usr/{bin,lib/x86_64-linux-gnu,sbin},var}
 chmod 1777 $CONTAINER_FS/tmp
 
@@ -98,7 +98,7 @@ copy_binary() {
     done
 }
 
-# Essential binaries to copy
+# Essential binaries to copy ------------------------------------------------------------------------------------
 ESSENTIAL_BINARIES=(
     /bin/bash
     /bin/ls
@@ -146,7 +146,7 @@ for binary in "${ESSENTIAL_BINARIES[@]}"; do
     fi
 done
 
-# Additional required libraries
+# Additional required libraries ------------------------------------------------------------------------------------
 EXTRA_LIBS=(
     /lib64/ld-linux-x86-64.so.2
     /lib/x86_64-linux-gnu/libnss_files.so.2
@@ -203,27 +203,27 @@ echo "Setting up network for $CONTAINER_NAME..."
 
 # Create network namespace (force remove old one first)
 ip netns del $CONTAINER_NAME 2>/dev/null || true
-ip netns add $CONTAINER_NAME || { echo "Failed to create network namespace"; exit 1; }
+ip netns add $CONTAINER_NAME 
 
 # Create veth pair (remove old ones first)
 ip link del veth0-new 2>/dev/null || true
-ip link add veth0-host type veth peer name veth1-new || { echo "Failed to create veth pair"; exit 1; }
+ip link add veth0-host type veth peer name veth1-new 
 
 # Move veth1-new to the container namespace
 ip link add veth1-host type veth peer name veth1-new
-ip link set veth1-new netns $CONTAINER_NAME || { echo "Failed to move veth1-new to namespace"; exit 1; }
+ip link set veth1-new netns $CONTAINER_NAME 
 
 # Configure host side
-ip addr addr 10.0.0.1/24 dev veth0-new || { echo "Failed to assign IP to veth0-new"; exit 1; }
-ip link set veth0-new up || { echo "Failed to bring up veth0-new"; exit 1; }
+ip addr addr 10.0.0.1/24 dev veth0-new 
+ip link set veth0-new up |
 
 # Configure container side
-ip netns exec $CONTAINER_NAME ip addr add 10.0.0.2/24 dev veth1-new || { echo "Failed to assign IP to veth1-new"; exit 1; }
-ip netns exec $CONTAINER_NAME ip link set veth1-new up || { echo "Failed to bring up veth1-new"; exit 1; }
-ip netns exec $CONTAINER_NAME ip link set lo up || { echo "Failed to bring up lo"; exit 1; }
+ip netns exec $CONTAINER_NAME ip addr add 10.0.0.2/24 dev veth1-new 
+ip netns exec $CONTAINER_NAME ip link set veth1-new up 
+ip netns exec $CONTAINER_NAME ip link set lo up 
 
 # Enable IP forwarding
-sudo sysctl -w net.ipv4.ip_forward=1 || { echo "Failed to enable IP forwarding"; exit 1; }
+sudo sysctl -w net.ipv4.ip_forward=1 
 
 # Port forwarding (for port 80 to 8000)
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 10.0.0.2:8000
@@ -233,7 +233,7 @@ iptables -A FORWARD -p tcp -d 10.0.0.2 --dport 8000 -j ACCEPT
 sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -j MASQUERADE
 
 # Add default route in container
-ip netns exec $CONTAINER_NAME ip route add default via 10.0.0.1 || { echo "Failed to set default route"; exit 1; }
+ip netns exec $CONTAINER_NAME ip route add default via 10.0.0.1 
 
 
 # Cgroups setup
