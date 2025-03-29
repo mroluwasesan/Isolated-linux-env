@@ -13,8 +13,15 @@ else
     CONTAINER_NAME=$1
 fi
 
-CONTAINER_ROOT=/var/containers/$CONTAINER_NAME
-CONTAINER_FS=$CONTAINER_ROOT/fs
+BASE_ROOT="/var/containers"
+BASE_LIB="/var/lib/containers"
+
+CONTAINER_ROOT="$BASE_ROOT/$CONTAINER_NAME"
+CONTAINER_BASE="$CONTAINER_ROOT/base"      # Base/lower filesystem
+CONTAINER_DATA="$BASE_LIB/$CONTAINER_NAME" # Persistent data
+CONTAINER_UPPER="$CONTAINER_DATA/upper"    # Upper layer for overlay
+CONTAINER_WORK="$CONTAINER_DATA/work"      # Overlay work directory
+CONTAINER_FS="$CONTAINER_DATA/fs"          # Mounted overlay filesystem
 HOST_IP="10.0.0.1"
 CONTAINER_IP="10.0.0.2"
 
@@ -51,6 +58,12 @@ fi
 # Check root
 [ "$(id -u)" -ne 0 ] && { echo "Must be root"; exit 1; }
 
+# Check overlay module
+if ! modprobe overlay 2>/dev/null; then
+    echo "Error: overlay module not available"
+    exit 1
+fi
+
 # Cleanup function
 cleanup() {
     echo "Cleaning up $CONTAINER_NAME..."
@@ -58,10 +71,11 @@ cleanup() {
     umount -lf $CONTAINER_FS/proc 2>/dev/null
     umount -lf $CONTAINER_FS/sys 2>/dev/null
     umount -lf $CONTAINER_FS/dev 2>/dev/null
+    umount -lf $CONTAINER_FS 2>/dev/null
     
     # Network cleanup
     ip netns del $CONTAINER_NAME 2>/dev/null
-    ip link del veth0 2>/dev/null
+    ip link del veth0-$CONTAINER_NAME 2>/dev/null
     
     # Remove cgroups
     [ -d "/sys/fs/cgroup/memory/$CONTAINER_NAME" ] && rmdir "/sys/fs/cgroup/memory/$CONTAINER_NAME"
@@ -70,14 +84,30 @@ cleanup() {
     echo "Cleanup complete."
 }
 
-# Clean command
-[ "$2" = "clean" ] && { cleanup; exit 0; }
+# Remove container completely
+remove_container() {
+    cleanup
+    rm -rf "$CONTAINER_ROOT"
+    rm -rf "$CONTAINER_DATA"
+    echo "Container removed completely."
+}
 
-# Clean before create if starting
-[ "$2" = "start" ] && cleanup
+# Clean command
+# Handle commands
+case "$2" in
+    "remove")
+        remove_container
+        exit 0 ;;
+    "clean")
+        cleanup
+        exit 0 ;;
+    "start"|"test")
+        cleanup ;;
+esac
 
 # Create filesystem structure ------------------------------------------------------------------------------------
 mkdir -p $CONTAINER_FS/{bin,dev,etc,lib,lib64,proc,root,sbin,sys,tmp,usr/{bin,lib/x86_64-linux-gnu,sbin},var}
+mkdir -p $CONTAINER_UPPER $CONTAINER_WORK $CONTAINER_FS
 chmod 1777 $CONTAINER_FS/tmp
 
 # Function to copy binary with all dependencies
@@ -97,6 +127,13 @@ copy_binary() {
         fi
     done
 }
+
+mkdir -p "$BASE_ROOT" "$BASE_LIB"
+mkdir -p "$CONTAINER_BASE" "$CONTAINER_DATA"
+# Setup overlay filesystem
+mount -t overlay overlay \
+    -o lowerdir=$CONTAINER_BASE,upperdir=$CONTAINER_UPPER,workdir=$CONTAINER_WORK \
+    $CONTAINER_FS
 
 # Essential binaries to copy ------------------------------------------------------------------------------------
 ESSENTIAL_BINARIES=(
@@ -201,39 +238,43 @@ EOF
 # Network setup ------------------------------------------------------------------------------------
 echo "Setting up network for $CONTAINER_NAME..."
 
+# Ensure netns directory exists
+mkdir -p /var/run/netns
 # Create network namespace (force remove old one first)
 ip netns del $CONTAINER_NAME 2>/dev/null || true
+ip link del veth0-$CONTAINER_NAME 2>/dev/null || true
+ip link del veth1-$CONTAINER_NAME 2>/dev/null || true
+# Create new network namespace
 ip netns add $CONTAINER_NAME 
 
-# Create veth pair (remove old ones first)
-ip link del veth0-new 2>/dev/null || true
-ip link add veth0-host type veth peer name veth1-new 
+# Create veth pair 
+ip link add veth0-$CONTAINER_NAME type veth peer name veth1-$CONTAINER_NAME 
 
 # Move veth1-new to the container namespace
-ip link add veth1-host type veth peer name veth1-new
-ip link set veth1-new netns $CONTAINER_NAME 
+ip link set veth1-$CONTAINER_NAME netns $CONTAINER_NAME
 
 # Configure host side
-ip addr addr 10.0.0.1/24 dev veth0-new 
-ip link set veth0-new up |
+ip addr add $HOST_IP/24 dev veth0-$CONTAINER_NAME
+ip link set veth0-$CONTAINER_NAME up
 
 # Configure container side
-ip netns exec $CONTAINER_NAME ip addr add 10.0.0.2/24 dev veth1-new 
-ip netns exec $CONTAINER_NAME ip link set veth1-new up 
+ip netns exec $CONTAINER_NAME ip addr add $CONTAINER_IP/24 dev veth1-$CONTAINER_NAME
+ip netns exec $CONTAINER_NAME ip link set veth1-$CONTAINER_NAME up
 ip netns exec $CONTAINER_NAME ip link set lo up 
 
 # Enable IP forwarding
-sudo sysctl -w net.ipv4.ip_forward=1 
+echo 1 > /proc/sys/net/ipv4/ip_forward
 
-# Port forwarding (for port 80 to 8000)
-iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 10.0.0.2:8000
-iptables -A FORWARD -p tcp -d 10.0.0.2 --dport 8000 -j ACCEPT
 
-# Set up NAT for outbound connections
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -j MASQUERADE
+# Set up NAT and forwarding
+iptables -t nat -F  # Clear existing NAT rules
+iptables -t nat -A POSTROUTING -s $CONTAINER_IP/24 -j MASQUERADE
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination $CONTAINER_IP:8000
+iptables -A FORWARD -p tcp -d $CONTAINER_IP --dport 8000 -j ACCEPT
+
 
 # Add default route in container
-ip netns exec $CONTAINER_NAME ip route add default via 10.0.0.1 
+ip netns exec $CONTAINER_NAME ip route add default via $HOST_IP 
 
 
 # Cgroups setup
@@ -329,15 +370,13 @@ test_limits() {
 # Start if requested
 if [ "$2" = "start" ]; then
     start_container
-    exit
 elif [ "$2" = "test" ]; then
     test_limits
-    exit
+else
+    echo "Container $CONTAINER_NAME ready"
+    echo "Commands:"
+    echo "  Start:  sudo $0 $CONTAINER_NAME start [MEMORY_MB] [CPU_PERCENT]"
+    echo "  Test:   sudo $0 $CONTAINER_NAME test [MEMORY_MB] [CPU_PERCENT]"
+    echo "  Clean:  sudo $0 $CONTAINER_NAME clean"
+    echo "  Remove: sudo $0 $CONTAINER_NAME remove"
 fi
-
-echo "Container $CONTAINER_NAME ready at $CONTAINER_FS"
-echo "Start with defaults: sudo $0 $CONTAINER_NAME start"
-echo "Start with custom limits: sudo $0 $CONTAINER_NAME start [MEMORY_MB] [CPU_PERCENT]"
-echo "Test with defaults: sudo $0 $CONTAINER_NAME test"
-echo "Test with custom limits: sudo $0 $CONTAINER_NAME test [MEMORY_MB] [CPU_PERCENT]"
-echo "Clean with: sudo $0 $CONTAINER_NAME clean"
